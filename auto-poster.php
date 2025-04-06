@@ -8,7 +8,14 @@ Version: 3.3
 // Activation and deactivation
 register_activation_hook(__FILE__, function () {
     if (!wp_next_scheduled('dap_generate_ai_post')) {
-        wp_schedule_event(time(), 'hourly', 'dap_generate_ai_post');
+        wp_schedule_event(time(), 'twicedaily', 'dap_generate_ai_post');
+    }
+    if (!get_option('dap_affiliate_links')) {
+        add_option('dap_affiliate_links', [
+            'CeraVe Hydrating Cleanser' => 'https://amzn.to/your-cerave-link',
+            'The Ordinary Niacinamide 10%' => 'https://amzn.to/your-niacinamide-link',
+            'La Roche-Posay Sunscreen' => 'https://amzn.to/your-lrp-link',
+        ]);
     }
 });
 
@@ -18,6 +25,12 @@ register_deactivation_hook(__FILE__, function () {
 
 add_action('dap_generate_ai_post', 'dap_create_ai_post');
 
+function dap_get_affiliate_link($product_name)
+{
+    $links = get_option('dap_affiliate_links', []);
+
+    return $links[$product_name] ?? 'https://amazon.com';
+}
 
 function dap_create_ai_post()
 {
@@ -28,26 +41,45 @@ function dap_create_ai_post()
     $sources_prompt = fn($topic) => "List 3 URLs where the topic '$topic' is being discussed. One per line.";
     $content_prompt = fn($topic) => "Write a 1000-word, SEO-optimized skincare blog post about \"{$topic}\".";
     $tags_prompt = fn($topic) => "Give 5 comma-separated tags for a skincare post about \"{$topic}\".";
-    $image_prompt = fn($topic) => "High-quality editorial product photo for a skincare blog post about {$topic}, glowing aesthetic, minimal background.";
+    $recs_prompt = fn($topic) => "Give 3 recommended skincare products for the topic \"{$topic}\". Format: Product Name – Reason.";
 
-    $topic = trim(dap_openai_prompt($api_key, $topic_prompt), "\"' \t\n\r\0\x0B");
+    $topic = trim(dap_openai_prompt($api_key, $topic_prompt), "\"' \n\r\t");
     if (!$topic) return;
 
     $content = dap_openai_prompt($api_key, $content_prompt($topic));
     $sources = dap_openai_prompt($api_key, $sources_prompt($topic));
     $tags_raw = dap_openai_prompt($api_key, $tags_prompt($topic));
+    $recommendations = dap_openai_prompt($api_key, $recs_prompt($topic));
 
     if (!$content) return;
 
+    // Generate recommendations HTML
+    $recs_html = '';
+    if ($recommendations) {
+        $recs_html = "<h3>🛍️ Recommended Picks</h3><ul>";
+        foreach (explode("\n", trim($recommendations)) as $line) {
+            if (strpos($line, '–') !== false) {
+                [$product, $desc] = explode('–', $line, 2);
+                $product = trim($product);
+                $desc = trim($desc);
+                $link = dap_get_affiliate_link($product); // Add your affiliate links here
+                $recs_html .= "<li><a href='{$link}' target='_blank'>{$product}</a> – {$desc}</li>";
+            }
+        }
+        $recs_html .= "</ul>";
+    }
+
+    $final_content = $content . "\n\n" . $recs_html;
+
     $post_id = wp_insert_post([
-        'post_title'   => ucfirst(trim($topic)),
-        'post_content' => $content,
+        'post_title'   => ucfirst($topic),
+        'post_content' => $final_content,
         'post_status'  => 'draft',
         'post_author'  => 1,
     ]);
 
     update_post_meta($post_id, '_dap_ai_generated', 1);
-    update_post_meta($post_id, '_dap_ai_topic', trim($topic));
+    update_post_meta($post_id, '_dap_ai_topic', $topic);
     update_post_meta($post_id, '_dap_ai_sources', trim($sources));
 
     if ($tags_raw) {
@@ -55,17 +87,9 @@ function dap_create_ai_post()
         wp_set_post_tags($post_id, $tags, false);
     }
 
-    // Generate featured image using DALL·E
-    $image_url = dap_generate_dalle_image($api_key, $image_prompt($topic));
-    if ($image_url) {
-        $image_id = dap_attach_image_to_post($image_url, $post_id);
-        if ($image_id) {
-            set_post_thumbnail($post_id, $image_id);
-        }
-    }
-
     return ucfirst($topic);
 }
+
 
 function dap_generate_dalle_image($api_key, $prompt)
 {
@@ -130,6 +154,14 @@ function dap_openai_prompt($api_key, $prompt)
 
 add_action('admin_menu', function () {
     add_menu_page('Auto Poster', 'Auto Poster', 'manage_options', 'dap-auto-poster', 'dap_admin_page', 'dashicons-schedule', 80);
+    add_submenu_page(
+        'dap-auto-poster',
+        'Affiliate Links',
+        'Affiliate Links',
+        'manage_options',
+        'dap-affiliate-links',
+        'dap_affiliate_links_page'
+    );
 });
 
 add_action('admin_init', function () {
@@ -357,3 +389,59 @@ add_action('wp_ajax_dap_unpublish_single_post', function () {
     wp_update_post(['ID' => $post_id, 'post_status' => 'draft']);
     wp_send_json_success(['id' => $post_id]);
 });
+
+function dap_affiliate_links_page()
+{
+    if (!current_user_can('manage_options')) return;
+
+    $links = get_option('dap_affiliate_links', []);
+
+    // Save form submission
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['dap_links_nonce']) && wp_verify_nonce($_POST['dap_links_nonce'], 'save_dap_links')) {
+        $products = $_POST['product'] ?? [];
+        $urls = $_POST['url'] ?? [];
+
+        $new_links = [];
+        foreach ($products as $i => $name) {
+            $name = trim($name);
+            $url = esc_url_raw(trim($urls[$i]));
+            if ($name && $url) {
+                $new_links[$name] = $url;
+            }
+        }
+
+        update_option('dap_affiliate_links', $new_links);
+        echo '<div class="updated"><p>Affiliate links saved.</p></div>';
+        $links = $new_links;
+    }
+?>
+
+    <div class="wrap">
+        <h1>Manage Affiliate Links</h1>
+        <form method="post">
+            <?php wp_nonce_field('save_dap_links', 'dap_links_nonce'); ?>
+            <table class="widefat">
+                <thead>
+                    <tr>
+                        <th>Product Name</th>
+                        <th>Affiliate URL</th>
+                    </tr>
+                </thead>
+                <tbody id="dap-links-body">
+                    <?php foreach ($links as $name => $url): ?>
+                        <tr>
+                            <td><input type="text" name="product[]" value="<?php echo esc_attr($name); ?>" style="width: 100%;"></td>
+                            <td><input type="url" name="url[]" value="<?php echo esc_url($url); ?>" style="width: 100%;"></td>
+                        </tr>
+                    <?php endforeach; ?>
+                    <tr>
+                        <td><input type="text" name="product[]" value="" style="width: 100%;"></td>
+                        <td><input type="url" name="url[]" value="" style="width: 100%;"></td>
+                    </tr>
+                </tbody>
+            </table>
+            <p><button type="submit" class="button button-primary">Save Links</button></p>
+        </form>
+    </div>
+<?php
+}
