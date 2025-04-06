@@ -1,14 +1,13 @@
 <?php
 /*
 Plugin Name: Daily Auto Poster
-Description: Posts drafts daily using AI with admin control and stats.
-Version: 2.0
+Description: Posts drafts daily using AI with admin control and usage stats.
+Version: 2.1
 */
 
 register_deactivation_hook(__FILE__, 'dap_deactivate');
 function dap_deactivate()
 {
-    wp_clear_scheduled_hook('dap_daily_event');
     wp_clear_scheduled_hook('dap_generate_ai_post');
 }
 
@@ -29,7 +28,7 @@ function dap_create_ai_post()
 
     $topic_prompt = "Give me one trending skincare topic that young women are currently interested in. Just return the topic, nothing else.";
     $post_prompt = function ($topic) {
-        return "Write a 1000-word, SEO-optimized blog post about \"\$topic\" for a skincare blog. Make it informative, friendly, and engaging.";
+        return "Write a 1000-word, SEO-optimized blog post about \"$topic\" for a skincare blog. Make it informative, friendly, and engaging.";
     };
 
     $topic = dap_openai_prompt($api_key, $topic_prompt);
@@ -46,6 +45,7 @@ function dap_create_ai_post()
         'post_category' => [1],
     ]);
 
+    update_post_meta($post_id, '_dap_ai_generated', 1); // Mark it as AI-generated
     return ucfirst($topic);
 }
 
@@ -92,13 +92,34 @@ function dap_register_settings()
     register_setting('dap_openai_settings', 'dap_openai_api_key');
 }
 
+function dap_get_monthly_ai_post_count()
+{
+    $start = date('Y-m-01 00:00:00');
+    $now = current_time('mysql');
+    $posts = get_posts([
+        'post_type'      => 'post',
+        'post_status'    => ['draft', 'publish'],
+        'posts_per_page' => -1,
+        'meta_key'       => '_dap_ai_generated',
+        'meta_value'     => 1,
+        'date_query'     => [
+            ['after' => $start, 'before' => $now, 'inclusive' => true],
+        ],
+        'fields' => 'ids',
+    ]);
+    return count($posts);
+}
+
 function dap_admin_page_html()
 {
     if (!current_user_can('manage_options')) return;
-
+    $api_key = get_option('dap_openai_api_key');
+    $ai_post_count = dap_get_monthly_ai_post_count();
+    $estimated_cost = round($ai_post_count * 0.017, 2);
 ?>
     <div class="wrap">
         <h1>Auto Poster Dashboard</h1>
+
         <p>Select how many drafts to publish:</p>
         <input type="number" id="dap_post_count" min="1" max="20" value="3" style="width: 60px;">
         <button class="button button-primary" id="dap_publish_btn">Publish Now</button>
@@ -111,30 +132,16 @@ function dap_admin_page_html()
         <h2>Next 3 Drafts</h2>
         <ul>
             <?php
-            $drafts = get_posts([
-                'post_status' => 'draft',
-                'posts_per_page' => 3,
-                'orderby' => 'date',
-                'order' => 'ASC'
-            ]);
-            foreach ($drafts as $post) {
-                echo "<li><strong>{$post->post_title}</strong></li>";
-            }
+            $drafts = get_posts(['post_status' => 'draft', 'posts_per_page' => 3, 'orderby' => 'date', 'order' => 'ASC']);
+            foreach ($drafts as $post) echo "<li><strong>{$post->post_title}</strong></li>";
             ?>
         </ul>
 
         <h2>10 Recent Published Posts</h2>
         <ul>
             <?php
-            $recent = get_posts([
-                'post_status' => 'publish',
-                'posts_per_page' => 10,
-                'orderby' => 'date',
-                'order' => 'DESC'
-            ]);
-            foreach ($recent as $post) {
-                echo "<li>{$post->post_title} <em>(" . get_the_date('', $post) . ")</em></li>";
-            }
+            $recent = get_posts(['post_status' => 'publish', 'posts_per_page' => 10, 'orderby' => 'date', 'order' => 'DESC']);
+            foreach ($recent as $post) echo "<li>{$post->post_title} <em>(" . get_the_date('', $post) . ")</em></li>";
             ?>
         </ul>
 
@@ -151,21 +158,14 @@ function dap_admin_page_html()
             <?php
             settings_fields('dap_openai_settings');
             do_settings_sections('dap_openai_settings');
-            $current_key = get_option('dap_openai_api_key');
             ?>
-            <input type="text" name="dap_openai_api_key" value="<?php echo esc_attr($current_key); ?>" style="width: 400px;" placeholder="Enter your OpenAI API key">
+            <input type="password" id="dap_api_key" name="dap_openai_api_key" value="<?php echo esc_attr($api_key); ?>" style="width: 400px;" placeholder="Enter your OpenAI API key">
+            <label><input type="checkbox" id="dap_toggle_key"> Show Key</label>
             <?php submit_button('Save API Key'); ?>
         </form>
 
-
-        <?php
-        $credits = dap_get_openai_credits();
-        if ($credits) {
-            echo "<p><strong>Remaining OpenAI Credits:</strong> \${$credits}</p>";
-        } else {
-            echo "<p style='color: red;'>Could not fetch usage info. Check your API key.</p>";
-        }
-        ?>
+        <p><strong>AI Posts This Month:</strong> <?= $ai_post_count ?></p>
+        <p><strong>Estimated API Cost:</strong> $<?= $estimated_cost ?></p>
     </div>
 
     <script>
@@ -174,6 +174,12 @@ function dap_admin_page_html()
         const countInput = document.getElementById('dap_post_count');
         const loader = document.getElementById('dap_loader');
         const result = document.getElementById('dap_publish_result');
+        const toggleKey = document.getElementById('dap_toggle_key');
+        const keyInput = document.getElementById('dap_api_key');
+
+        toggleKey.addEventListener('change', () => {
+            keyInput.type = toggleKey.checked ? 'text' : 'password';
+        });
 
         publishBtn.addEventListener('click', () => {
             const count = countInput.value;
@@ -247,20 +253,15 @@ function dap_ajax_publish_now()
 
 function dap_post_n_drafts($count = 3)
 {
-    $drafts = get_posts([
-        'post_status' => 'draft',
-        'posts_per_page' => $count,
-        'orderby' => 'date',
-        'order' => 'ASC',
-    ]);
+    $drafts = get_posts(['post_status' => 'draft', 'posts_per_page' => $count, 'orderby' => 'date', 'order' => 'ASC']);
+    $ids = [];
 
-    $published_ids = [];
     foreach ($drafts as $draft) {
         wp_update_post(['ID' => $draft->ID, 'post_status' => 'publish']);
-        $published_ids[] = $draft->ID;
+        $ids[] = $draft->ID;
     }
 
-    dap_store_last_published($published_ids);
+    dap_store_last_published($ids);
     return count($drafts);
 }
 
@@ -301,21 +302,4 @@ function dap_ajax_generate_ai_post_now()
         wp_send_json_error(['message' => 'Failed to generate post.']);
     }
 }
-
-function dap_get_openai_credits()
-{
-    $key = get_option('dap_openai_api_key');
-    if (!$key) return false;
-
-    $response = wp_remote_get('https://api.openai.com/v1/dashboard/billing/credit_grants', [
-        'headers' => [
-            'Authorization' => 'Bearer ' . $key,
-            'Content-Type'  => 'application/json',
-        ]
-    ]);
-
-    if (is_wp_error($response)) return false;
-
-    $body = json_decode(wp_remote_retrieve_body($response), true);
-    return isset($body['total_available']) ? round($body['total_available'], 2) : false;
-}
+?>
