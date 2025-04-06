@@ -1,16 +1,11 @@
 <?php
 /*
 Plugin Name: Daily Auto Poster
-Description: Posts drafts daily using AI with admin control and usage stats.
-Version: 2.1
+Description: AI-powered auto-poster with manual controls, metadata, and smart tagging.
+Version: 3.1
 */
 
-register_deactivation_hook(__FILE__, 'dap_deactivate');
-function dap_deactivate()
-{
-    wp_clear_scheduled_hook('dap_generate_ai_post');
-}
-
+// Activation and deactivation hooks
 register_activation_hook(__FILE__, 'dap_activate_ai');
 function dap_activate_ai()
 {
@@ -19,6 +14,13 @@ function dap_activate_ai()
     }
 }
 
+register_deactivation_hook(__FILE__, 'dap_deactivate');
+function dap_deactivate()
+{
+    wp_clear_scheduled_hook('dap_generate_ai_post');
+}
+
+// Hook for generating post
 add_action('dap_generate_ai_post', 'dap_create_ai_post');
 
 function dap_create_ai_post()
@@ -27,14 +29,25 @@ function dap_create_ai_post()
     if (!$api_key) return;
 
     $topic_prompt = "Give me one trending skincare topic that young women are currently interested in. Just return the topic, nothing else.";
-    $post_prompt = function ($topic) {
-        return "Write a 1000-word, SEO-optimized blog post about \"$topic\" for a skincare blog. Make it informative, friendly, and engaging.";
+    $sources_prompt = function ($topic) {
+        return "List 3 sources where this topic ('{$topic}') is being discussed online. Respond in plain text with one URL per line.";
     };
+    $post_prompt = function ($topic) {
+        return "Write a 1000-word, SEO-optimized blog post about \"{$topic}\" for a skincare blog. Make it informative, friendly, and engaging.";
+    };
+
+    $tags_prompt = function ($topic) {
+        return "Based on the topic \"{$topic}\", suggest 5 relevant tags or keywords for a skincare blog. Separate each tag with a comma.";
+    };
+
 
     $topic = dap_openai_prompt($api_key, $topic_prompt);
     if (!$topic) return;
 
     $content = dap_openai_prompt($api_key, $post_prompt($topic));
+    $sources = dap_openai_prompt($api_key, $sources_prompt($topic));
+    $tags_raw = dap_openai_prompt($api_key, $tags_prompt($topic));
+
     if (!$content) return;
 
     $post_id = wp_insert_post([
@@ -45,7 +58,15 @@ function dap_create_ai_post()
         'post_category' => [1],
     ]);
 
-    update_post_meta($post_id, '_dap_ai_generated', 1); // Mark it as AI-generated
+    update_post_meta($post_id, '_dap_ai_generated', 1);
+    update_post_meta($post_id, '_dap_ai_topic', trim($topic));
+    update_post_meta($post_id, '_dap_ai_sources', trim($sources));
+
+    if ($tags_raw) {
+        $tags = array_map('trim', explode(',', $tags_raw));
+        wp_set_post_tags($post_id, $tags, false);
+    }
+
     return ucfirst($topic);
 }
 
@@ -72,18 +93,11 @@ function dap_openai_prompt($api_key, $prompt)
     return $body['choices'][0]['message']['content'] ?? false;
 }
 
+// Admin page registration
 add_action('admin_menu', 'dap_register_admin_page');
 function dap_register_admin_page()
 {
-    add_menu_page(
-        'Auto Poster',
-        'Auto Poster',
-        'manage_options',
-        'dap-auto-poster',
-        'dap_admin_page_html',
-        'dashicons-schedule',
-        80
-    );
+    add_menu_page('Auto Poster', 'Auto Poster', 'manage_options', 'dap-auto-poster', 'dap_admin_page_html', 'dashicons-schedule', 80);
 }
 
 add_action('admin_init', 'dap_register_settings');
@@ -92,214 +106,128 @@ function dap_register_settings()
     register_setting('dap_openai_settings', 'dap_openai_api_key');
 }
 
-function dap_get_monthly_ai_post_count()
-{
-    $start = date('Y-m-01 00:00:00');
-    $now = current_time('mysql');
-    $posts = get_posts([
-        'post_type'      => 'post',
-        'post_status'    => ['draft', 'publish'],
-        'posts_per_page' => -1,
-        'meta_key'       => '_dap_ai_generated',
-        'meta_value'     => 1,
-        'date_query'     => [
-            ['after' => $start, 'before' => $now, 'inclusive' => true],
-        ],
-        'fields' => 'ids',
-    ]);
-    return count($posts);
-}
-
+// Admin dashboard output
 function dap_admin_page_html()
 {
     if (!current_user_can('manage_options')) return;
     $api_key = get_option('dap_openai_api_key');
-    $ai_post_count = dap_get_monthly_ai_post_count();
-    $estimated_cost = round($ai_post_count * 0.017, 2);
 ?>
     <div class="wrap">
         <h1>Auto Poster Dashboard</h1>
 
-        <p>Select how many drafts to publish:</p>
-        <input type="number" id="dap_post_count" min="1" max="20" value="3" style="width: 60px;">
-        <button class="button button-primary" id="dap_publish_btn">Publish Now</button>
-        <button class="button" id="dap_undo_btn" style="margin-left:10px;">Undo</button>
-        <span id="dap_loader" style="display:none;">⏳ Publishing...</span>
-        <div id="dap_publish_result" style="margin-top:15px;"></div>
-
-        <hr>
-
-        <h2>Next 3 Drafts</h2>
+        <h2>Drafts</h2>
         <ul>
             <?php
-            $drafts = get_posts(['post_status' => 'draft', 'posts_per_page' => 3, 'orderby' => 'date', 'order' => 'ASC']);
-            foreach ($drafts as $post) echo "<li><strong>{$post->post_title}</strong></li>";
+            $drafts = get_posts([
+                'post_status' => 'draft',
+                'meta_key' => '_dap_ai_generated',
+                'meta_value' => 1,
+                'posts_per_page' => 10,
+                'orderby' => 'date',
+                'order' => 'ASC'
+            ]);
+            foreach ($drafts as $post) {
+                $topic = get_post_meta($post->ID, '_dap_ai_topic', true);
+                echo "<li>
+                    <button class='button' onclick='dapPublishSingle({$post->ID})'>Publish</button>
+                    <strong>[{$post->ID}] {$post->post_title}</strong>";
+                if ($topic) echo " – <em>{$topic}</em>";
+                echo "</li>";
+            }
             ?>
         </ul>
 
-        <h2>10 Recent Published Posts</h2>
+        <h2>Published Posts</h2>
         <ul>
             <?php
-            $recent = get_posts(['post_status' => 'publish', 'posts_per_page' => 10, 'orderby' => 'date', 'order' => 'DESC']);
-            foreach ($recent as $post) echo "<li>{$post->post_title} <em>(" . get_the_date('', $post) . ")</em></li>";
+            $published = get_posts([
+                'post_status' => 'publish',
+                'meta_key' => '_dap_ai_generated',
+                'meta_value' => 1,
+                'posts_per_page' => 10,
+                'orderby' => 'date',
+                'order' => 'DESC'
+            ]);
+            foreach ($published as $post) {
+                $topic = get_post_meta($post->ID, '_dap_ai_topic', true);
+                $sources = get_post_meta($post->ID, '_dap_ai_sources', true);
+                $tags = wp_get_post_tags($post->ID, ['fields' => 'names']);
+
+                echo "<li><strong>[{$post->ID}]</strong> <a href='" . get_permalink($post->ID) . "' target='_blank'>{$post->post_title}</a>";
+                if ($topic) echo " – <em>{$topic}</em>";
+                if ($tags) echo "<br><strong>Tags:</strong> " . implode(', ', $tags);
+                if ($sources) {
+                    echo "<br><strong>Sources:</strong><ul>";
+                    foreach (explode("\n", $sources) as $src) {
+                        $src = trim($src);
+                        if ($src) echo "<li><a href='{$src}' target='_blank'>{$src}</a></li>";
+                    }
+                    echo "</ul>";
+                }
+                echo " <button class='button' onclick='dapUnpublishSingle({$post->ID})'>Unpublish</button>";
+                echo "</li><br>";
+            }
             ?>
         </ul>
 
-        <hr>
-
-        <h2>AI Tools</h2>
-        <p>Click below to generate a blog post using AI and save it as a draft:</p>
-        <button class="button button-secondary" id="dap_ai_generate_btn">Generate AI Post</button>
-        <span id="dap_ai_loader" style="display:none;">🧠 Generating...</span>
-        <div id="dap_ai_result" style="margin-top:15px;"></div>
-
-        <h3>OpenAI Settings</h3>
         <form method="post" action="options.php">
-            <?php
-            settings_fields('dap_openai_settings');
-            do_settings_sections('dap_openai_settings');
-            ?>
-            <input type="password" id="dap_api_key" name="dap_openai_api_key" value="<?php echo esc_attr($api_key); ?>" style="width: 400px;" placeholder="Enter your OpenAI API key">
+            <?php settings_fields('dap_openai_settings');
+            do_settings_sections('dap_openai_settings'); ?>
+            <input type="password" id="dap_api_key" name="dap_openai_api_key" value="<?php echo esc_attr($api_key); ?>" style="width: 400px;" placeholder="Enter OpenAI API key">
             <label><input type="checkbox" id="dap_toggle_key"> Show Key</label>
             <?php submit_button('Save API Key'); ?>
         </form>
-
-        <p><strong>AI Posts This Month:</strong> <?= $ai_post_count ?></p>
-        <p><strong>Estimated API Cost:</strong> $<?= $estimated_cost ?></p>
     </div>
 
     <script>
-        const publishBtn = document.getElementById('dap_publish_btn');
-        const undoBtn = document.getElementById('dap_undo_btn');
-        const countInput = document.getElementById('dap_post_count');
-        const loader = document.getElementById('dap_loader');
-        const result = document.getElementById('dap_publish_result');
         const toggleKey = document.getElementById('dap_toggle_key');
         const keyInput = document.getElementById('dap_api_key');
+        if (toggleKey) {
+            toggleKey.addEventListener('change', () => {
+                keyInput.type = toggleKey.checked ? 'text' : 'password';
+            });
+        }
 
-        toggleKey.addEventListener('change', () => {
-            keyInput.type = toggleKey.checked ? 'text' : 'password';
-        });
-
-        publishBtn.addEventListener('click', () => {
-            const count = countInput.value;
-            loader.style.display = 'inline-block';
-            result.innerHTML = '';
+        function dapPublishSingle(postId) {
             fetch(ajaxurl, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded'
-                    },
-                    body: `action=dap_publish_now&count=${count}`
-                })
-                .then(res => res.json())
-                .then(data => {
-                    loader.style.display = 'none';
-                    result.innerHTML = `<strong>${data.published} post(s) published.</strong>`;
-                    location.reload();
-                });
-        });
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                },
+                body: `action=dap_publish_single_post&post_id=${postId}`
+            }).then(res => res.json()).then(data => {
+                if (data.success) location.reload();
+                else alert('Error: ' + data.message);
+            });
+        }
 
-        undoBtn.addEventListener('click', () => {
-            loader.style.display = 'inline-block';
-            result.innerHTML = '';
+        function dapUnpublishSingle(postId) {
             fetch(ajaxurl, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded'
-                    },
-                    body: `action=dap_undo_publish`
-                })
-                .then(res => res.json())
-                .then(data => {
-                    loader.style.display = 'none';
-                    result.innerHTML = `<strong>${data.undone} post(s) moved back to drafts.</strong>`;
-                    location.reload();
-                });
-        });
-
-        document.getElementById('dap_ai_generate_btn').addEventListener('click', () => {
-            document.getElementById('dap_ai_loader').style.display = 'inline-block';
-            document.getElementById('dap_ai_result').innerHTML = '';
-            fetch(ajaxurl, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded'
-                    },
-                    body: `action=dap_generate_ai_post_now`
-                })
-                .then(res => res.json())
-                .then(data => {
-                    document.getElementById('dap_ai_loader').style.display = 'none';
-                    if (data.success) {
-                        document.getElementById('dap_ai_result').innerHTML = `<strong>AI post created:</strong> "${data.title}"`;
-                        location.reload();
-                    } else {
-                        document.getElementById('dap_ai_result').innerHTML = `<span style='color:red;'>Error: ${data.message}</span>`;
-                    }
-                });
-        });
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                },
+                body: `action=dap_unpublish_single_post&post_id=${postId}`
+            }).then(res => res.json()).then(data => {
+                if (data.success) location.reload();
+                else alert('Error: ' + data.message);
+            });
+        }
     </script>
 <?php }
 
-add_action('wp_ajax_dap_publish_now', 'dap_ajax_publish_now');
-function dap_ajax_publish_now()
-{
-    if (!current_user_can('manage_options')) wp_send_json_error('Unauthorized');
-    $count = isset($_POST['count']) ? intval($_POST['count']) : 3;
-    $published = dap_post_n_drafts($count);
-    wp_send_json(['published' => $published]);
-}
-
-function dap_post_n_drafts($count = 3)
-{
-    $drafts = get_posts(['post_status' => 'draft', 'posts_per_page' => $count, 'orderby' => 'date', 'order' => 'ASC']);
-    $ids = [];
-
-    foreach ($drafts as $draft) {
-        wp_update_post(['ID' => $draft->ID, 'post_status' => 'publish']);
-        $ids[] = $draft->ID;
-    }
-
-    dap_store_last_published($ids);
-    return count($drafts);
-}
-
-function dap_store_last_published($ids)
-{
-    set_transient('dap_last_published_ids', $ids, 3600);
-}
-
-function dap_undo_last_publish()
-{
-    $ids = get_transient('dap_last_published_ids');
-    if (!$ids || !is_array($ids)) return 0;
-
-    foreach ($ids as $id) {
-        wp_update_post(['ID' => $id, 'post_status' => 'draft']);
-    }
-
-    delete_transient('dap_last_published_ids');
-    return count($ids);
-}
-
-add_action('wp_ajax_dap_undo_publish', 'dap_ajax_undo_publish');
-function dap_ajax_undo_publish()
-{
-    if (!current_user_can('manage_options')) wp_send_json_error('Unauthorized');
-    $undone = dap_undo_last_publish();
-    wp_send_json(['undone' => $undone]);
-}
-
-add_action('wp_ajax_dap_generate_ai_post_now', 'dap_ajax_generate_ai_post_now');
-function dap_ajax_generate_ai_post_now()
-{
+add_action('wp_ajax_dap_publish_single_post', function () {
     if (!current_user_can('manage_options')) wp_send_json_error(['message' => 'Unauthorized']);
-    $title = dap_create_ai_post();
-    if ($title) {
-        wp_send_json_success(['title' => $title]);
-    } else {
-        wp_send_json_error(['message' => 'Failed to generate post.']);
-    }
-}
-?>
+    $post_id = intval($_POST['post_id'] ?? 0);
+    if (!$post_id) wp_send_json_error(['message' => 'Invalid post ID']);
+    wp_update_post(['ID' => $post_id, 'post_status' => 'publish']);
+    wp_send_json_success(['id' => $post_id]);
+});
+
+add_action('wp_ajax_dap_unpublish_single_post', function () {
+    if (!current_user_can('manage_options')) wp_send_json_error(['message' => 'Unauthorized']);
+    $post_id = intval($_POST['post_id'] ?? 0);
+    if (!$post_id) wp_send_json_error(['message' => 'Invalid post ID']);
+    wp_update_post(['ID' => $post_id, 'post_status' => 'draft']);
+    wp_send_json_success(['id' => $post_id]);
+});
