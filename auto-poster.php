@@ -18,6 +18,7 @@ register_deactivation_hook(__FILE__, function () {
 
 add_action('dap_generate_ai_post', 'dap_create_ai_post');
 
+
 function dap_create_ai_post()
 {
     $api_key = get_option('dap_openai_api_key');
@@ -27,8 +28,9 @@ function dap_create_ai_post()
     $sources_prompt = fn($topic) => "List 3 URLs where the topic '$topic' is being discussed. One per line.";
     $content_prompt = fn($topic) => "Write a 1000-word, SEO-optimized skincare blog post about \"{$topic}\".";
     $tags_prompt = fn($topic) => "Give 5 comma-separated tags for a skincare post about \"{$topic}\".";
+    $image_prompt = fn($topic) => "High-quality editorial product photo for a skincare blog post about {$topic}, glowing aesthetic, minimal background.";
 
-    $topic = dap_openai_prompt($api_key, $topic_prompt);
+    $topic = trim(dap_openai_prompt($api_key, $topic_prompt), "\"' \t\n\r\0\x0B");
     if (!$topic) return;
 
     $content = dap_openai_prompt($api_key, $content_prompt($topic));
@@ -53,8 +55,55 @@ function dap_create_ai_post()
         wp_set_post_tags($post_id, $tags, false);
     }
 
+    // Generate featured image using DALL·E
+    $image_url = dap_generate_dalle_image($api_key, $image_prompt($topic));
+    if ($image_url) {
+        $image_id = dap_attach_image_to_post($image_url, $post_id);
+        if ($image_id) {
+            set_post_thumbnail($post_id, $image_id);
+        }
+    }
+
     return ucfirst($topic);
 }
+
+function dap_generate_dalle_image($api_key, $prompt)
+{
+    $response = wp_remote_post('https://api.openai.com/v1/images/generations', [
+        'headers' => [
+            'Authorization' => 'Bearer ' . $api_key,
+            'Content-Type' => 'application/json',
+        ],
+        'body' => json_encode([
+            'prompt' => $prompt,
+            'n' => 1,
+            'size' => '1024x1024',
+        ]),
+    ]);
+
+    if (is_wp_error($response)) return false;
+
+    $body = json_decode(wp_remote_retrieve_body($response), true);
+    return $body['data'][0]['url'] ?? false;
+}
+
+function dap_attach_image_to_post($image_url, $post_id)
+{
+    $tmp = download_url($image_url);
+    if (is_wp_error($tmp)) return false;
+
+    $filename = basename(parse_url($image_url, PHP_URL_PATH));
+    $file_array = [
+        'name'     => $filename,
+        'tmp_name' => $tmp,
+    ];
+
+    $id = media_handle_sideload($file_array, $post_id);
+    if (is_wp_error($id)) return false;
+
+    return $id;
+}
+
 
 function dap_openai_prompt($api_key, $prompt)
 {
