@@ -64,7 +64,7 @@ function dap_create_ai_post()
 
     if (!$content) return;
 
-    // Create the post first (blank content for now)
+    // Insert initial post
     $post_id = wp_insert_post([
         'post_title'   => ucfirst($topic),
         'post_content' => '',
@@ -72,11 +72,11 @@ function dap_create_ai_post()
         'post_author'  => 1,
     ]);
 
-    // Get category slug for affiliate group targeting
+    // Get category slug (if assigned)
     $cats = get_the_category($post_id);
     $primary_category_slug = $cats[0]->slug ?? null;
 
-    // Generate recommendations HTML
+    // Build recommendations HTML
     $recs_html = '';
     if ($recommendations) {
         $recs_html = "<h3>🛍️ Recommended Picks</h3><ul>";
@@ -92,22 +92,35 @@ function dap_create_ai_post()
         $recs_html .= "</ul>";
     }
 
+    // Combine content and recommendations
     $final_content = $content . "\n\n" . $recs_html;
 
-    // Update the post with final content
+    // 🖼️ Generate featured image and attach
+    $image_prompt = "A beautiful, high-resolution featured image for a skincare blog post titled: \"$topic\". Make it look elegant and relevant.";
+    $image_url = dap_generate_dalle_image($api_key, $image_prompt);
+
+    if ($image_url) {
+        $attachment_id = dap_attach_image_to_post($image_url, $post_id);
+        if ($attachment_id) {
+            set_post_thumbnail($post_id, $attachment_id);
+        }
+    }
+
+    // Update post content
     wp_update_post([
         'ID' => $post_id,
         'post_content' => $final_content,
     ]);
 
-    update_post_meta($post_id, '_dap_ai_generated', 1);
-    update_post_meta($post_id, '_dap_ai_topic', $topic);
-    update_post_meta($post_id, '_dap_ai_sources', trim($sources));
-
+    // Set tags and meta
     if ($tags_raw) {
         $tags = array_map('trim', explode(',', $tags_raw));
         wp_set_post_tags($post_id, $tags, false);
     }
+
+    update_post_meta($post_id, '_dap_ai_generated', 1);
+    update_post_meta($post_id, '_dap_ai_topic', $topic);
+    update_post_meta($post_id, '_dap_ai_sources', trim($sources));
 
     return ucfirst($topic);
 }
@@ -287,19 +300,38 @@ function dap_admin_page()
         }
 
         function dapGenerateAiPost() {
-            document.getElementById('dap_ai_status').innerText = '⏳ Generating...';
+            const status = document.getElementById('dap_ai_status');
+
+            let steps = [
+                '🧠 Generating topic...',
+                '✍️ Writing article...',
+                '🔎 Finding sources...',
+                '🏷️ Creating tags...',
+                '🛍️ Building product list...',
+                '🎨 Generating featured image...',
+                '📎 Attaching image...',
+                '✅ Finalizing post...'
+            ];
+
+            let stepIndex = 0;
+            const stepInterval = setInterval(() => {
+                if (stepIndex < steps.length) {
+                    status.innerText = steps[stepIndex];
+                    stepIndex++;
+                }
+            }, 3000); // ~3000ms per step
+
             fetch(ajaxurl, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded'
-                },
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                 body: 'action=dap_generate_ai_post_now'
             }).then(res => res.json()).then(data => {
+                clearInterval(stepInterval);
                 if (data.success) {
-                    document.getElementById('dap_ai_status').innerText = '✅ Post created!';
+                    status.innerText = '✅ Post created!';
                     location.reload();
                 } else {
-                    document.getElementById('dap_ai_status').innerText = '❌ Failed: ' + data.data.message;
+                    status.innerText = '❌ Failed: ' + data.data.message;
                 }
             });
         }
