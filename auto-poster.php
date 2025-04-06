@@ -25,11 +25,22 @@ register_deactivation_hook(__FILE__, function () {
 
 add_action('dap_generate_ai_post', 'dap_create_ai_post');
 
-function dap_get_affiliate_link($product_name)
+function dap_get_affiliate_link($product_name, $category_slug = null)
 {
-    $links = get_option('dap_affiliate_links', []);
+    $all_links = get_option('dap_affiliate_links', []);
 
-    return $links[$product_name] ?? 'https://amazon.com';
+    // Check specific category group
+    if ($category_slug && isset($all_links[$category_slug])) {
+        $links = $all_links[$category_slug];
+        if (isset($links[$product_name])) return $links[$product_name];
+    }
+
+    // Fallback: search all groups
+    foreach ($all_links as $group) {
+        if (isset($group[$product_name])) return $group[$product_name];
+    }
+
+    return 'https://amazon.com';
 }
 
 function dap_create_ai_post()
@@ -53,6 +64,18 @@ function dap_create_ai_post()
 
     if (!$content) return;
 
+    // Create the post first (blank content for now)
+    $post_id = wp_insert_post([
+        'post_title'   => ucfirst($topic),
+        'post_content' => '',
+        'post_status'  => 'draft',
+        'post_author'  => 1,
+    ]);
+
+    // Get category slug for affiliate group targeting
+    $cats = get_the_category($post_id);
+    $primary_category_slug = $cats[0]->slug ?? null;
+
     // Generate recommendations HTML
     $recs_html = '';
     if ($recommendations) {
@@ -62,7 +85,7 @@ function dap_create_ai_post()
                 [$product, $desc] = explode('–', $line, 2);
                 $product = trim($product);
                 $desc = trim($desc);
-                $link = dap_get_affiliate_link($product); // Add your affiliate links here
+                $link = dap_get_affiliate_link($product, $primary_category_slug);
                 $recs_html .= "<li><a href='{$link}' target='_blank'>{$product}</a> – {$desc}</li>";
             }
         }
@@ -71,11 +94,10 @@ function dap_create_ai_post()
 
     $final_content = $content . "\n\n" . $recs_html;
 
-    $post_id = wp_insert_post([
-        'post_title'   => ucfirst($topic),
+    // Update the post with final content
+    wp_update_post([
+        'ID' => $post_id,
         'post_content' => $final_content,
-        'post_status'  => 'draft',
-        'post_author'  => 1,
     ]);
 
     update_post_meta($post_id, '_dap_ai_generated', 1);
@@ -89,7 +111,6 @@ function dap_create_ai_post()
 
     return ucfirst($topic);
 }
-
 
 function dap_generate_dalle_image($api_key, $prompt)
 {
