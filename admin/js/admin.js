@@ -310,3 +310,43 @@
     }
     
 })(jQuery);
+
+jQuery(document).ready(function ($) {
+  $('.dap-update-schedule').on('click', function () {
+    const postId = $(this).data('id');
+    const datetime = $(`.dap-schedule-input[data-id="${postId}"]`).val();
+    const status = $(`#status-${postId}`);
+    status.text('Saving...');
+
+    $.post(ajaxurl, {
+      action: 'dap_update_schedule',
+      post_id: postId,
+      datetime: datetime
+    }, function (response) {
+      if (response.success) {
+        status.text('Updated ✅');
+      } else {
+        status.text('Error ❌');
+      }
+    });
+  });
+});
+
+jQuery(document).ready(function ($) {
+  $('#dap-save-topic').on('click', function () {
+    const topic = $('#dap_topic').val();
+    const status = $('#dap_topic_status');
+    status.text('Saving...');
+
+    $.post(ajaxurl, {
+      action: 'dap_save_topic',
+      topic: topic
+    }, function (response) {
+      if (response.success) {
+        status.text('Saved ✅');
+      } else {
+        status.text('Error ❌');
+      }
+    });
+  });
+});

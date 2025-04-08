@@ -173,4 +173,39 @@ class DAP_Auto_Poster {
         
         return $id;
     }
+    /**
+     * Generate a trend-aware, emotion-driven AI post using ChatGPT
+     *
+     * @param string $general_topic
+     * @return int|WP_Error post ID or error
+     */
+    public function generate_emotion_driven_post($general_topic) {
+        $api_key = get_option('dap_openai_api_key');
+        if (!$api_key || !$this->openai_api) {
+            return new WP_Error('missing_api', 'API key or OpenAI API instance missing');
+        }
+
+        $this->openai_api->set_api_key($api_key);
+
+        $trend_prompt = "Find the most current and emotionally compelling trending topic in the world related to \"$general_topic\". Then, based on the emotional nature of that story, generate:
+            - a short, clickable post title
+            - a brief emotional tone description (e.g., dramatic, optimistic, tense, etc.)
+            - an emotional intensity score from 1 to 10
+            - a category this belongs to (e.g., tech, fashion, global news, etc.)
+            - 3 to 5 relevant tags
+            - a DALL·E prompt that matches the tone
+            - a full, emotionally engaging blog post using that tone.
+
+            Format your response in JSON like this:
+            {
+              \"title\": \"...\",
+              \"emotion\": \"...\",
+              \"score\": 0-10,
+              \"category\": \"...\",
+              \"tags\": [\"...\", \"...\"],
+              \"dalle_prompt\": \"...\",
+              \"content\": \"...\"
+            }";
+    }
+
 }
