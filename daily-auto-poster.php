@@ -51,3 +51,20 @@ function run_daily_auto_poster() {
 }
 
 run_daily_auto_poster();
+
+// Custom schedule interval: hourly
+add_filter('cron_schedules', function($schedules) {
+    $schedules['hourly'] = array(
+        'interval' => 3600,
+        'display'  => __('Once Hourly')
+    );
+    return $schedules;
+});
+
+// Cron hook: generate and schedule post
+add_action('dap_generate_ai_post', function () {
+    $poster = new DAP_Auto_Poster();
+    $poster->set_openai_api(new DAP_OpenAI_API());
+    $poster->set_affiliate_manager(new DAP_Affiliate_Manager());
+    $poster->create_ai_post();
+});

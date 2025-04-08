@@ -1,5 +1,4 @@
 <?php
-
 /**
  * Main admin page template
  */
@@ -63,13 +62,13 @@ if (!defined('WPINC')) {
           <img src="<?= esc_url($thumb) ?>" class="dap-post-thumb" alt="thumbnail" />
         <?php endif; ?>
         <div class="dap-post-info">
-<?php
-$datetime = date('Y-m-d\TH:i', strtotime($scheduled));
-?>
-<br>
-<input type="datetime-local" class="dap-schedule-input" data-id="<?= $post->ID ?>" value="<?= esc_attr($datetime) ?>">
-<button class="button dap-update-schedule" data-id="<?= $post->ID ?>">Update</button>
-<span class="dap-schedule-status" id="status-<?= $post->ID ?>" style="margin-left: 10px;"></span>
+          <?php
+          $datetime = date('Y-m-d\TH:i', strtotime($scheduled));
+          ?>
+          <br>
+          <input type="datetime-local" class="dap-schedule-input" data-id="<?= $post->ID ?>" value="<?= esc_attr($datetime) ?>">
+          <button class="button dap-update-schedule" data-id="<?= $post->ID ?>">Update</button>
+          <span class="dap-schedule-status" id="status-<?= $post->ID ?>" style="margin-left: 10px;"></span>
           <strong>[<?= $post->ID ?>] <?= esc_html($post->post_title) ?></strong>
           <?php if ($topic): ?><br><em><?= esc_html($topic) ?></em><?php endif; ?>
           <?php $cats = get_the_category($post->ID);
@@ -121,29 +120,83 @@ $datetime = date('Y-m-d\TH:i', strtotime($scheduled));
   </ul>
 
   <h3>Automation Status</h3>
-<?php
-$next = wp_next_scheduled('dap_daily_generate_post');
-$last = get_option('_dap_last_generated_time', null);
-?>
-<p><strong>Last Generated:</strong> <?= $last ? date('M j, Y @ g:ia', $last) : 'Never' ?></p>
-<p><strong>Next Scheduled:</strong> <?= $next ? date('M j, Y @ g:ia', $next) : 'Not scheduled' ?></p>
+  <?php
+  $next = wp_next_scheduled('dap_daily_generate_post');
+  $last = get_option('_dap_last_generated_time', null);
+  ?>
+  <p><strong>Last Generated:</strong> <?= $last ? date('M j, Y @ g:ia', $last) : 'Never' ?></p>
+  <p><strong>Next Scheduled:</strong> <?= $next ? date('M j, Y @ g:ia', $next) : 'Not scheduled' ?></p>
 
-<h3>Default Topic</h3>
-<textarea id="dap_topic" rows="2" style="width: 100%; max-width: 500px;"><?= esc_textarea(get_option('dap_default_topic', '')) ?></textarea>
-<br>
-<button class="button" id="dap-save-topic">Save Topic</button>
-<span id="dap_topic_status" style="margin-left: 10px;"></span>
+  <h3>Default Topic</h3>
+  <textarea id="dap_topic" rows="2" style="width: 100%; max-width: 500px;"><?= esc_textarea(get_option('dap_default_topic', 'skincare and beauty products')) ?></textarea>
+  <br>
+  <button class="button" id="dap-save-topic">Save Topic</button>
+  <span id="dap_topic_status" style="margin-left: 10px;"></span>
 
-<hr>
-  <h3>OpenAI Settings</h3>
+  <hr>
+  
+  <h2>Plugin Settings</h2>
   <form method="post" action="options.php">
-    <?php
-    settings_fields('dap_openai_settings');
-    do_settings_sections('dap_openai_settings');
-    $key = get_option('dap_openai_api_key');
-    ?>
-    <input type="password" id="dap_api_key" name="dap_openai_api_key" value=" echo esc_attr($key); " style="width: 400px;" placeholder="Enter your OpenAI API key">
-    <label><input type="checkbox" id="dap_toggle_key"> Show Key</label>
-    <?php submit_button('Save API Key'); ?>
+    <?php settings_fields('dap_openai_settings'); ?>
+    <?php do_settings_sections('dap_openai_settings'); ?>
+
+    <h3>AI Content Settings</h3>
+    <table class="form-table">
+      <tr>
+        <th scope="row"><label for="dap_topic">Main Topic / Niche</label></th>
+        <td>
+          <input type="text" name="dap_topic" id="dap_topic_setting" value="<?php echo esc_attr(get_option('dap_topic', 'skincare')); ?>" class="regular-text">
+        </td>
+      </tr>
+
+      <tr>
+        <th scope="row"><label for="dap_image_style_prompt">Image Prompt Template</label></th>
+        <td>
+          <textarea name="dap_image_style_prompt" id="dap_image_style_prompt" rows="4" class="large-text"><?php echo esc_textarea(get_option('dap_image_style_prompt', 'Create a stunning, emotionally resonant image that represents the essence of [TOPIC]. It should be visually striking and spark curiosity instantly.')); ?></textarea>
+          <p class="description">Use <code>[TOPIC]</code> as a placeholder for the topic/niche.</p>
+        </td>
+      </tr>
+
+      <tr>
+        <th scope="row">Current Resolved Prompt</th>
+        <td>
+          <code style="display:block;padding:10px;background:#f9f9f9;border:1px solid #ccc;">
+            <?php echo esc_html(str_replace('[TOPIC]', get_option('dap_topic', 'skincare'), get_option('dap_image_style_prompt', 'Create a stunning, emotionally resonant image that represents the essence of [TOPIC]. It should be visually striking and spark curiosity instantly.'))); ?>
+          </code>
+        </td>
+      </tr>
+
+      <tr>
+        <th scope="row"><label for="dap_publish_delay_hours">Publish Delay (Hours)</label></th>
+        <td>
+          <input type="number" name="dap_publish_delay_hours" id="dap_publish_delay_hours" value="<?php echo esc_attr(get_option('dap_publish_delay_hours', 24)); ?>" min="1" max="168" class="small-text"> hours
+        </td>
+      </tr>
+
+      <tr>
+        <th scope="row"><label for="dap_cron_frequency">Generation Frequency</label></th>
+        <td>
+          <select name="dap_cron_frequency" id="dap_cron_frequency">
+            <?php $freq = get_option('dap_cron_frequency', 'hourly'); ?>
+            <option value="hourly" <?php selected($freq, 'hourly'); ?>>Hourly</option>
+            <option value="twicedaily" <?php selected($freq, 'twicedaily'); ?>>Twice Daily</option>
+            <option value="daily" <?php selected($freq, 'daily'); ?>>Once Daily</option>
+          </select>
+        </td>
+      </tr>
+    </table>
+
+    <h3>OpenAI API Settings</h3>
+    <table class="form-table">
+      <tr>
+        <th scope="row"><label for="dap_api_key">OpenAI API Key</label></th>
+        <td>
+          <input type="password" id="dap_api_key" name="dap_openai_api_key" value="<?php echo esc_attr(get_option('dap_openai_api_key', '')); ?>" style="width: 400px;" placeholder="Enter your OpenAI API key">
+          <label><input type="checkbox" id="dap_toggle_key"> Show Key</label>
+        </td>
+      </tr>
+    </table>
+
+    <?php submit_button('Save All Settings'); ?>
   </form>
 </div>

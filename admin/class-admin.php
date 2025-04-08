@@ -50,7 +50,12 @@ class DAP_Admin {
      * Register plugin settings
      */
     public function register_settings() {
+        // Register all settings under one group
         register_setting('dap_openai_settings', 'dap_openai_api_key');
+        register_setting('dap_openai_settings', 'dap_topic');
+        register_setting('dap_openai_settings', 'dap_image_style_prompt');
+        register_setting('dap_openai_settings', 'dap_publish_delay_hours');
+        register_setting('dap_openai_settings', 'dap_cron_frequency');
     }
     
     /**
